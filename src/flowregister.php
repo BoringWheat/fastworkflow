@@ -7,7 +7,7 @@
 
 namespace fastworkflow;
 
-class fastworkflow{
+class flowregister{
 
     public function __construct()
     {
