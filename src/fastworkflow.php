@@ -13,6 +13,8 @@ class fastworkflow{
     {
         var_dump('ttttt');
 
+        var_dump('hello');
+
     }
 }
 
