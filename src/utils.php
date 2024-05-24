@@ -51,6 +51,7 @@
          while($gateway_condition)
          {
              $path_item = current($gateway_condition);
+             if($path_item==false) break;
              if(self::rule_match($data, $path_item['rule']))
              {
                  $path = $path_item['path'];
@@ -560,57 +561,47 @@
 
      /**
       * 获取可以驳回的节点
-      *   驳回不可以越过并行网关，（todo）但可以越过竞争网关
-      * @param $step
-      * @param $conf
+      * task05151  驳回到所有分支
+      * @param $step 等待审批的节点
+      * @param $conf 按照分支处理的配置
+      * @param $history_step 历史走过的流程节点
+      * @param $flow_conf  流程配置
       */
-     public static function getRejectStepList($step, $conf)
-     {
+     public static function getRejectStepList($step, $conf,$history_step=[],$flow_conf=[])
+     { 
          $reject_step_list = [];
+         $roll_reject_list=[];
          $gatewayPath = []; //记录单线上的分支
-         foreach ($conf as $path)
-         {
-             //先判断是否在该分支
-             if(in_array($step,array_keys($path)))
-             {
-                 while ($k = key($path))
-                 {
-                     //遇到并行网关就清空
-                     if (in_array(current($path)['type'], ['ParallelGatewayStart', 'Gateway', 'ParallelGatewayEnd'])) {
-                         $reject_step_list = [];
-                         next($path);
-                     }
-                     if (in_array(current($path)['type'], ['CompetitiveGatewayStart', 'CompetitiveGatewayStartEnd'])) {
-                         next($path);
-                     }
-                     if ($k == $step) {
-                         break 2;
-                     }
-                     $reject_step_list[] = $k;
-                     next($path);
-                 }
-             }else{
-                 foreach ($path as $item)
-                 {
-                     if($item['type'] == 'Gateway')
-                     {
-                         $gatewayPath = array_merge($gatewayPath, (array)$item['item']);
-                     }
-                 }
-             }
+         $path_name=[1];
+         $path_name[]=$flow_conf['item'][$step]['path_name'];
+        //  $skip_type=['ParallelGatewayStart', 'Gateway', 'ParallelGatewayEnd','CompetitiveGatewayStart', 'CompetitiveGatewayStartEnd'];
+         foreach ($conf as $k=>$path){
+            if(!in_array($k,$path_name))continue;//只能驳回当前分支和主分支
+            foreach($path as $pk=>$pv){
+                $pv_type=$pv['type'];
+
+                if($pv_type=='UserTask'){//主分支
+                    
+                    if($pv['id']==$step)break; 
+                    if(!isset($history_step[$k]))continue;
+                    if(!in_array($pv['id'],$history_step[$k]))continue;//不可驳回到没走过的流程节点
+
+                    $reject_step_list[] = $pv['id'];
+
+                }else if($pv_type=='Gateway'){//分支
+
+                    $gatewayPath = (array)$pv['item'];
+                    $roll_reject_list = self::getRejectStepList($step, $gatewayPath,(array)$history_step,$flow_conf);
+
+                    $reject_step_list=array_merge($reject_step_list,$roll_reject_list);
+                }
+            }
+            
          }
-         if($reject_step_list)
-         {
-             return $reject_step_list;
-         }else{
-             if(count($gatewayPath)>0)
-             {
-                 $reject_step_list = self::getRejectStepList($step, $gatewayPath);
-                 return $reject_step_list;
-             }else{
-                 return [];
-             }
-         }
+       
+
+        return array_unique($reject_step_list);
+         
      }
 
      /**
@@ -646,52 +637,159 @@
       * date: 2020-11-10 16:02
       * $param $from ,$to ,$conf
       * $return 返回被驳回的节点
+      * 1.处于同一个分支节点内，没出分支
+      * 2.从自分支驳回到主分支
+      * 3.从主分支 驳回到主分支 ，中间有子分支
       */
-     public static function getRejectedSteps($from, $to, $conf)
-     {
-         $r = [];
-         $gatewayPath = []; //记录单线上的分支
-         foreach ($conf as $path)
-         {
-             //todo 需要考虑跳过竞争网关的情况，比较好的方案是将竞争网关生成的路径与上级路径直接合并拼接
-             if(in_array($from,array_keys($path)) && in_array($to,array_keys($path)))
-             {
-                 foreach ($path as $k=>$v)
-                 {
-                     if($v['id'] == $to)
-                     {
-                         $sta = true;
-                     }
-                     if($sta)
-                     {
-                         $r[] = $v['id'];
-                     }
-                     if($v['id'] == $from)
-                     {
-                         break 2;
-                     }
-                 }
-             }else{
-                 foreach ($path as $item)
-                 {
-                     if($item['type'] == 'Gateway')
-                     {
-                         $gatewayPath = array_merge($gatewayPath, (array)$item['item']);
-                     }
-                 }
-             }
+     public static function getRejectedSteps($from, $to, $conf,$flow_conf)
+     { 
+         $r = [];//返回的需要驳回的节点的step 
+        //  $gatewayPath = []; //记录单线上的分支
+         $flow_conf=$flow_conf['item'];
+         $to_path_name=$flow_conf[$to]['path_name'];
+         $from_path_name=$flow_conf[$from]['path_name'];
+         $is2primary=[];//需要一起驳回的节点路径
+         $flow_keys=array_keys($flow_conf);
+         $from_step=array_search($from,$flow_keys);
+         $to_step=array_search($to,$flow_keys);
+
+         if($to_path_name==$from_path_name&&$from_path_name==1){
+            //主分支到主分支
+            $tmp_r=array_slice($flow_keys,$to_step,$from_step-$to_step+1);
+            $tmp_diff=[];
+            foreach($flow_conf as $k=>$item){
+                if($item['type']!='UserTask')$tmp_diff[]=$k;//去掉网关节点
+            }
+            $tmp_r=array_diff($tmp_r,$tmp_diff);
+           
+            return $tmp_r;
          }
 
-         if($r)
-         {
-             return $r;
-         }else{
-             if(count($gatewayPath))
-             {
-                 $r = self::getRejectedSteps($from, $to, $gatewayPath);
-             }
-             return $r;
+         if($to_path_name==$from_path_name&&$from_path_name!=1){
+            //子分支驳回到当前子分支
+            $tmp_r=array_slice($flow_keys,$to_step,$from_step-$to_step+1);
+            return $tmp_r;
          }
+
+         //分支驳回到主分支,同一个分支的所有都驳回:主分支+当前子分支+同级别的所有子分支         
+         if($from_path_name!=$to_path_name&&$from_path_name!=1&&$to_path_name==1){
+            $is2primary=self::getSameLevelStep($from,$flow_conf);
+            if(empty($is2primary)){//没有同极流程
+                $tmp_r=array_slice($flow_keys,$to_step,$from_step-$to_step+1);
+                foreach($flow_conf as $k=>$item){
+                    if(!in_array($k,$tmp_r))continue;
+                    $tmp_key=array_search($k,$tmp_r);
+                    if($item['type']!='UserTask')unset($tmp_r[$tmp_key]);//去掉网关节点
+                }
+                return $tmp_r;
+
+            }else{//有同级别流程
+                $tmp_r=[];
+                $prim=[];$tofrom=false;
+                $cur_steps=[];//当前子分支需要驳回的节点
+                foreach($flow_conf as $k=>$item){
+                    if($item['type']=='UserTask'&&in_array($item['path_name'],$is2primary)){
+                        $tmp_r[]=$k;continue;//同级别分支
+                    }
+
+                    if(!$tofrom&&$item['type']=='UserTask'&&$item['path_name']==$flow_conf[$to]['path_name']){
+                        $prim[]=$k;continue;//from之前的主表单
+                    }
+
+                    if($k==$from){
+                        $tofrom=true;
+                    }
+
+                    if($item['path_name']==$from_path_name&&$item['type']=='UserTask'){
+                        $cur_steps[]=$k;continue;//获取当前子分支的所有节点
+                    }
+
+                }
+            }
+
+            $cur_step=array_search($from,$cur_steps);
+            $dqfz=array_slice($cur_steps,0,$cur_step+1);//获取当前子分支需要驳回的节点
+
+            $first_step=array_search($to,$prim);
+            $zfz=array_slice($prim,$first_step,sizeof($prim)-$first_step);//获取需要驳回的主分支
+
+            
+            $tmp_r=array_merge($tmp_r,$dqfz,$zfz);
+            return $tmp_r;
+        }
+
+        //子分支驳回到另一个子分支:当前子分支+（如有）同级别分支+（如有）主分支+驳回的分支
+        if($from_path_name!=$to_path_name&&$from_path_name!=1&&$to_path_name!=1){
+            $is2primary=self::getSameLevelStep($from,$flow_conf);//驳回的分支是否有并行的
+            $is2tp=self::getSameLevelStep($to,$flow_conf);//驳回到的分支是否有并行的
+            
+            if(empty($is2primary)){//没有同极流程
+              
+                $tmp_r=array_slice($flow_keys,$to_step,$from_step-$to_step+1);
+                foreach($flow_conf as $k=>$item){
+                    if(!in_array($k,$tmp_r))continue;
+                    if($is2tp&&in_array($item['path_name'],$is2tp))continue;//is2tp 驳回到的有同级别，就要跳过,避免被驳回
+                    $tmp_key=array_search($k,$tmp_r);
+                    if($item['type']!='UserTask')unset($tmp_r[$tmp_key]);//去掉网关节点
+                }
+                return $tmp_r;
+
+            }else{//当前驳回的节点有并行的
+               
+                $tmp_r=[];$prim=[];$tofrom=false;
+                $cur_steps=[];//当前子分支需要驳回的节点
+                foreach($flow_conf as $k=>$item){
+                    if($is2tp&&in_array($item['path_name'],$is2tp))continue;//to子分支的并行分支不处理
+
+                    if($k==$from){//驳回的节点 from
+                        $tmp_r[]=$k;break;
+                    }
+
+                    if($tofrom&&$item['type']=='UserTask'&&$item['path_name']==1){
+                        $zfz[]=$k;//to-from之前的主表单
+                    }
+
+                    if($k==$to){//驳回到的节点 to
+                        $tofrom=true;$tmp_r[]=$k;$zfz[]=$k;continue;
+                    }
+
+                    if(!$tofrom)continue;
+
+                    if($item['type']=='UserTask'&&$item['path_name']==$from_path_name)
+                     $cur_steps[]=$k;//获取当前子分支的所有节点
+
+                    if($item['type']=='UserTask'&&in_array($item['path_name'],$is2primary)){
+                        $tmp_r[]=$k;continue;//from同级别分支 都需要驳回
+                    }
+
+                }
+                $cur_step=array_search($from,$cur_steps);//获取当前子分支需要驳回的节点
+                $dqfz=array_slice($cur_steps,0,$cur_step+1);
+                
+                $tmp_r=array_merge($tmp_r,$dqfz,$zfz);
+                return $tmp_r;
+            }
+
+        }
+
+       //主分支驳回到子分支
+       if($from_path_name==1&&$to_path_name!=1){
+        $tmp_start=false;
+        foreach($flow_keys as $item){
+            if($flow_conf[$item]['type']!='UserTask')continue;//去掉网关节点
+            if(!in_array($flow_conf[$item]['path_name'],[1,$to_path_name]))continue;
+            if($from==$item&&$tmp_start)break;
+
+            if($to==$item){$tmp_start=true;continue;}
+
+            if($tmp_start)$r[]=$item;
+        }
+        $r[]=$from;$r[]=$to;
+
+       }  
+        
+        return $r;
+      
      }
 
      /**
@@ -820,4 +918,40 @@
          }
 
      }
+
+     /*
+     * 获取分支中的同级别分支
+     * $from, $flow_conf
+     */
+    public static function  getSameLevelStep($from,$flow_conf){
+        $start_gateway= false;//当前分支的开始和结束
+        $get_path=false;
+        $_path=[];
+        $from_path=$flow_conf[$from]['path_name'];
+       foreach($flow_conf as $k=>$item){
+          
+           if($item['type']!='UserTask'&&!$get_path){
+               $start_gateway=$k;//网关
+               $_path=[];
+               continue;
+           }
+           if($from==$k){//驳回的节点
+               $get_path=true;
+               // $_path[]=$item['path_name'];
+               continue;
+           }
+
+           if($item['type']!='UserTask'&&$get_path)break;//分支结束
+           
+           if($start_gateway){
+               $_path[]=$item['path_name'];
+           }
+       }
+       $from_p=array_search($from_path,$_path);
+       if($from_p)unset($_path[$from_p]);
+
+       return array_unique($_path);
+    }
+
+
  }

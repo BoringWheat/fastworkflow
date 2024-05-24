@@ -112,6 +112,7 @@ class process{
      * 会签操作
      * @param $option
      * 此部分沿用内部业务逻辑
+     * @return
      *
      */
     function jointProcess($option, $history_step_data, $post_data)
@@ -126,6 +127,7 @@ class process{
                 $act_approver[$v['uid']] = $co_sign_conf['completionCondition']['co_sign_p'][$v['uid']]?:1; //默认一票
             }
         }
+        
         $act_approver[$post_data['uid']] = $co_sign_conf['completionCondition']['co_sign_p'][$post_data['uid']]?:1; //默认一票
         if($co_sign_conf['completionCondition']['count_type'] == 'end')
         {
@@ -143,6 +145,8 @@ class process{
                 {
                     case 'next':
                         $next = $this->findNextAvtivity($option, $history_step_data, $post_data);
+                        //添加返回的结果用于_hook
+                        $next['jointProcessResult'] = $r['result'];
                         break;
                     case 'continue': //配置错误
                         $next = array(
@@ -159,6 +163,7 @@ class process{
                             'current_step' => 'terminate',
                             'status' => 'terminate'
                         );
+                        $next['jointProcessResult'] = $r['result'];
                         break;
                 }
             }
@@ -168,6 +173,7 @@ class process{
             {
                 case 'next':
                     $next = $this->findNextAvtivity($option, $history_step_data, $post_data);
+                    $next['jointProcessResult'] = $r['result'];
                     break;
                 case 'continue':
                     $next = array(
@@ -184,6 +190,7 @@ class process{
                         'current_step' => 'terminate',
                         'status' => 'terminate'
                     );
+                    $next['jointProcessResult'] = $r['result'];
                     break;
             }
         }
@@ -250,16 +257,20 @@ class process{
             $r_map['status'] = 'terminate';
         }else{ //依次匹配
             $act_approver_all_num = count($co_sign_conf['completionCondition']['collection']);
-            foreach ($condition as $k=>$v)
-            {
-                $co_sign_match = utils::co_sign_match($rsc, $v['condition'], $act_approver_all_num);
-                if ($co_sign_match) {
-                    $r_map['result'] = $k;
-                    $r_map['status'] = 'next';
+            if($condition){
+                foreach ($condition as $k=>$v)
+                {
+                    $co_sign_match = utils::co_sign_match($rsc, $v['condition'], $act_approver_all_num);
+                    if ($co_sign_match) {
+                        $r_map['result'] = $k;
+                        $r_map['status'] = 'next';
+                    }
                 }
+            }else{
+                $r_map['result'] = "";
+                $r_map['status'] = 'next';
             }
         }
-
         //todo 需要区分是否有异常
         if(!$r_map){
             $r_map = ['co_sign_result' => '', 'status'=>'continue'];
@@ -273,7 +284,7 @@ class process{
      */
     function findBackAvtivity($option)
     {
-        $rejected_list = utils::getRejectedSteps($option['from'], $option['to'], $this->structure_conf);
+        $rejected_list = utils::getRejectedSteps($option['from'], $option['to'], $this->structure_conf,$this->conf);
         return $rejected_list;
     }
 

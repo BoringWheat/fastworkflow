@@ -30,7 +30,7 @@ class flowregister{
     /**
      * @var 流程配置
      */
-    protected $conf;
+    public $conf;
 
     /**
      * @var array 网关类型
@@ -156,7 +156,7 @@ class flowregister{
      */
     public function GetReject($step_id)
     {
-        return utils::getRejectStepList($step_id, $this->structure_conf);
+        return utils::getRejectStepList($step_id, $this->structure_conf,$this->history_steps,$this->conf);
     }
 
     /**
